@@ -613,7 +613,7 @@ autolearn {
   junk_threshold = 4.0;
   ham_threshold = -0.5;
   check_balance = true;
-  min_balance = 0.9;
+  min_balance = 0.6;
   options {
     probability_check {
       spam_min = 0.92;
@@ -628,9 +628,15 @@ statfile { symbol = "BAYES_HAM"; spam = false; }
 EOF
 
 cat > /etc/rspamd/local.d/fuzzy_check.conf <<EOF
+enabled = true;
 rule "rspamd.com" {
-    # Explicitly use only the server you know is working
-    servers = "fuzzy2.rspamd.com:11335";
+    servers = "fuzzy1.rspamd.com:11335,fuzzy2.rspamd.com";
+    read_only = true;
+    upstream_error_time = 10s;
+    upstream_max_errors = 3;
+    upstream_revive_time = 600s;
+    timeout = 4s;
+    retransmits = 1; 
 };
 EOF
 
@@ -712,6 +718,10 @@ symbols {
     DMARC_POLICY_REJECT { weight = 6.0; }
     DMARC_POLICY_QUARANTINE { weight = 4.0; }
   }
+EOF
+
+cat > /etc/rspamd/local.d/arc.conf <<EOF
+enabled=true
 EOF
 
 # ----------------------------
