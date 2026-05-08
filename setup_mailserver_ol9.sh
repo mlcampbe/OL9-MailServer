@@ -27,9 +27,14 @@ dnf install -y oracle-epel-release-el9
 dnf config-manager --set-enabled ol9_codeready_builder
 sudo dnf config-manager --enable ol9_developer_EPEL
 curl -sSL https://rspamd.com/rpm-stable/centos-9/rspamd.repo | tee /etc/yum.repos.d/rspamd.repo
+dnf install -y https://rpms.remirepo.net/enterprise/remi-release-9.rpm
+dnf module reset php
+dnf module enable php:remi-8.0 -y
 
 echo "Installing Packages..."
-packages="postfix rspamd redis certbot fail2ban unbound curl policycoreutils-python-utils"
+packages="postfix rspamd redis certbot fail2ban unbound curl policycoreutils-python-utils httpd mod_ssl"
+packages="${packages} php php-cli php-fpm php-common php-curl php-soap php-sysvshm python3-certbot-apache"
+packages="${packages} php-sysvsem php-mbstring php-process php-xml php-imap"
 if [[ $SERVER_TYPE == "primary" ]]; then
   packages="${packages} dovecot dovecot-pigeonhole"
 fi
@@ -46,6 +51,7 @@ systemctl enable --now firewalld
 # Use port numbers to avoid 'service not found' errors on OL9
 firewall-cmd --permanent --add-service=ssh
 firewall-cmd --permanent --add-service=http
+firewall-cmd --permanent --add-service=https
 firewall-cmd --permanent --add-service=imaps
 firewall-cmd --permanent --add-service=smtp
 firewall-cmd --permanent --add-port=587/tcp
@@ -67,7 +73,7 @@ if [[ $SERVER_TYPE == "primary" ]]; then
 else
   subj="-d $MAILHOST"
 fi
-certbot certonly --standalone $subj --agree-tos -m $ADMINEMAIL --non-interactive
+certbot certonly --apache $subj --agree-tos -m $ADMINEMAIL --non-interactive
 
 # ----------------------------
 # Create external mail storage
@@ -85,6 +91,44 @@ chmod 700 $MAILDIR
 setsebool -P antivirus_can_scan_system 1
 semanage fcontext -a -t mail_spool_t "$MAILDIR(/.*)?"
 restorecon -Rv $MAILDIR
+
+# ----------------------------
+# APACHE CONFIG
+# ----------------------------
+echo "Configuring Apache..."
+setsebool -P httpd_can_network_connect 1
+cat > /etc/httpd/conf.d/mail.conf <<EOF
+# --- PORT 80: REDIRECT & CERTBOT VALIDATION ---
+<VirtualHost *:80>
+    ServerName $DOMAIN
+    ServerAlias $MAILHOST
+    DocumentRoot /var/www/html
+    RewriteEngine on
+    RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
+    RewriteRule ^ https://%{SERVER_NAME}%{REQUEST_URI} [L,R=301]
+</VirtualHost>
+
+# --- PORT 443: SECURE Z-PUSH & MAIL ---
+<VirtualHost *:443>
+    ServerName $DOMAIN
+    ServerAlias $MAILHOST
+    DocumentRoot /var/www/html
+    ProxyTimeout 3600
+    SSLEngine on
+    Alias /Microsoft-Server-ActiveSync /usr/share/z-push/index.php
+    ProxyPass /Microsoft-Server-ActiveSync unix:/run/php-fpm/www.sock|fcgi://localhost/usr/share/z-push/index.php timeout=3600
+    <Directory /usr/share/z-push>
+        Options +FollowSymLinks
+        AllowOverride None
+        Require all granted
+    </Directory>
+    ErrorLog logs/$MAILHOST_error_log
+    CustomLog logs/$MAILHOST_access_log combined
+    Include /etc/letsencrypt/options-ssl-apache.conf
+    SSLCertificateFile /etc/letsencrypt/live/$MAILHOST/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/$MAILHOST/privkey.pem
+</VirtualHost>
+EOF
 
 # ----------------------------
 # POSTFIX (Relay via SMTP2GO)
@@ -782,6 +826,35 @@ logpath = /var/log/fail2ban.log
 bantime = 1w
 findtime = 1d
 maxretry = 5
+
+[rspamd]
+enabled  = true
+port     = 11334
+filter   = rspamd
+logpath  = /var/log/rspamd/rspamd.log
+maxretry = 3
+
+[z-push]
+enabled  = true
+port     = http,https
+filter   = z-push
+logpath  = /var/log/z-push/z-push.log
+maxretry = 5
+findtime = 600
+bantime  = 3600
+EOF
+
+cat > /etc/fail2ban/filter.d/rspamd.conf <<EOF
+[Definition]
+failregex = ^.*controller; .* \(.*\) <.*>; auth_handler: auth failed from <HOST>$
+            ^.*controller; .* \(.*\) <.*>; auth_handler: unauthorized from <HOST>$
+ignoreregex =
+EOF
+
+cat > /etc/fail2ban/filter.d/z-push.conf <<EOF
+[Definition]
+failregex = ^.* \[WARN\] \[.*\] User-Agent: '.*' IP: '<HOST>' refers to unknown user or password incorrect$
+ignoreregex =
 EOF
 
 # ----------------------------
