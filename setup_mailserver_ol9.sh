@@ -789,7 +789,6 @@ sed -i 's/^# save 60 10000/save 60 10000/' /etc/redis/redis.conf
 sed -i 's/^appendonly no/appendonly yes/' /etc/redis/redis.conf
 sed -i 's/^# maxmemory <bytes>/maxmemory 500mb/' /etc/redis/redis.conf
 sed -i 's/^# maxmemory-policy noeviction/maxmemory-policy volatile-ttl/' /etc/redis/redis.conf
-systemctl restart redis
 
 # ----------------------------
 # FAIL2BAN
@@ -858,6 +857,25 @@ ignoreregex =
 EOF
 
 # ----------------------------
+# Z-Push
+# ----------------------------
+mkdir -p /usr/share/z-push /var/log/z-push /var/lib/z-push
+chown -R apache:apache /usr/share/z-push /var/log/z-push /var/lib/z-push
+chmod 755 /usr/share/z-push /var/log/z-push /var/lib/z-push
+chcon -R -t httpd_sys_content_t /usr/share/z-push
+git clone https://github.com/Z-Hub/Z-Push.git
+cp -R Z-Push*/src/* /usr/share/z-push
+sed -i "s/define('TIMEZONE', '');/define('TIMEZONE', 'America\/Chicago');/" /usr/share/z-push/config.php
+sed -i "s/define('IPC_PROVIDER', '');/define('IPC_PROVIDER', 'IpcSharedMemoryProvider');/" /usr/share/z-push/config.php
+sed -i "s/define('LOGLEVEL', 'LOGLEVEL_INFO');/define('LOGLEVEL', 'LOGLEVEL_WARN');/" /usr/share/z-push/config.php
+sed -i "s/define('BACKEND_PROVIDER', '');/define('BACKEND_PROVIDER', 'BackendIMAP');/" /usr/share/z-push/config.php
+sed -i "s/define('IMAP_PORT', '143');/define('IMAP_PORT', '993');/" /usr/share/z-push/backend/imap/config.php
+sed -i "s/define('IMAP_OPTIONS', '\/notls\/norsh');/define('IMAP_OPTIONS', '\/ssl\/novalidate-cert');/" /usr/share/z-push/backend/imap/config.php
+sed -i "s/define('IMAP_FOLDER_CONFIGURED', 'false');/define('IMAP_FOLDER_CONFIGURED', 'true');/" /usr/share/z-push/backend/imap/config.php
+sed -i "s/define('IMAP_FOLDER_SENT', 'SENT');/define('IMAP_FOLDER_SENT', 'SENT MESSAGES');/" /usr/share/z-push/backend/imap/config.php
+sed -i "s/define('IMAP_FOLDER_SPAM', 'SPAM');/define('IMAP_FOLDER_SPAM', 'JUNK');/" /usr/share/z-push/backend/imap/config.php
+
+# ----------------------------
 # UNBOUND
 # ----------------------------
 echo "Configuring Unbound..."
@@ -905,7 +923,8 @@ systemctl enable --now certbot-renew.timer
 restorecon -Rv /etc/postfix /var/spool/postfix /usr/libexec/postfix
 setsebool -P nis_enabled 1
 echo "Restarting Services..."
-systemctl enable --now redis rspamd postfix dovecot fail2ban unbound
+systemctl enable --now redis rspamd postfix dovecot fail2ban unbound httpd php-fpm
+systemctl restart redis rspamd postfix dovecot fail2ban unbound httpd php-fpm
 
 echo ""
 echo "INSTALL COMPLETE"
