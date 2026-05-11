@@ -27,14 +27,10 @@ dnf install -y oracle-epel-release-el9
 dnf config-manager --set-enabled ol9_codeready_builder
 sudo dnf config-manager --enable ol9_developer_EPEL
 curl -sSL https://rspamd.com/rpm-stable/centos-9/rspamd.repo | tee /etc/yum.repos.d/rspamd.repo
-dnf install -y https://rpms.remirepo.net/enterprise/remi-release-9.rpm
-dnf module reset php
-dnf module enable php:remi-8.0 -y
 
 echo "Installing Packages..."
-packages="postfix rspamd redis certbot fail2ban unbound curl policycoreutils-python-utils httpd mod_ssl"
-packages="${packages} php php-cli php-fpm php-common php-curl php-soap php-sysvshm python3-certbot-apache"
-packages="${packages} php-sysvsem php-mbstring php-process php-xml php-imap"
+packages="postfix rspamd redis certbot fail2ban unbound curl policycoreutils-python-utils"
+
 if [[ $SERVER_TYPE == "primary" ]]; then
   packages="${packages} dovecot dovecot-pigeonhole"
 fi
@@ -73,7 +69,7 @@ if [[ $SERVER_TYPE == "primary" ]]; then
 else
   subj="-d $MAILHOST"
 fi
-certbot certonly --apache $subj --agree-tos -m $ADMINEMAIL --non-interactive
+certbot certonly --standalone $subj --agree-tos -m $ADMINEMAIL --non-interactive
 
 # ----------------------------
 # Create external mail storage
@@ -91,44 +87,6 @@ chmod 700 $MAILDIR
 setsebool -P antivirus_can_scan_system 1
 semanage fcontext -a -t mail_spool_t "$MAILDIR(/.*)?"
 restorecon -Rv $MAILDIR
-
-# ----------------------------
-# APACHE CONFIG
-# ----------------------------
-echo "Configuring Apache..."
-setsebool -P httpd_can_network_connect 1
-cat > /etc/httpd/conf.d/mail.conf <<EOF
-# --- PORT 80: REDIRECT & CERTBOT VALIDATION ---
-<VirtualHost *:80>
-    ServerName $DOMAIN
-    ServerAlias $MAILHOST
-    DocumentRoot /var/www/html
-    RewriteEngine on
-    RewriteCond %{REQUEST_URI} !^/\.well-known/acme-challenge/
-    RewriteRule ^ https://%{SERVER_NAME}%{REQUEST_URI} [L,R=301]
-</VirtualHost>
-
-# --- PORT 443: SECURE Z-PUSH & MAIL ---
-<VirtualHost *:443>
-    ServerName $DOMAIN
-    ServerAlias $MAILHOST
-    DocumentRoot /var/www/html
-    ProxyTimeout 3600
-    SSLEngine on
-    Alias /Microsoft-Server-ActiveSync /usr/share/z-push/index.php
-    ProxyPass /Microsoft-Server-ActiveSync unix:/run/php-fpm/www.sock|fcgi://localhost/usr/share/z-push/index.php timeout=3600
-    <Directory /usr/share/z-push>
-        Options +FollowSymLinks
-        AllowOverride None
-        Require all granted
-    </Directory>
-    ErrorLog logs/$MAILHOST_error_log
-    CustomLog logs/$MAILHOST_access_log combined
-    Include /etc/letsencrypt/options-ssl-apache.conf
-    SSLCertificateFile /etc/letsencrypt/live/$MAILHOST/fullchain.pem
-    SSLCertificateKeyFile /etc/letsencrypt/live/$MAILHOST/privkey.pem
-</VirtualHost>
-EOF
 
 # ----------------------------
 # POSTFIX (Relay via SMTP2GO)
@@ -475,7 +433,7 @@ enable_password = "$HASHED_PASS";
 EOF
 
 # ----------------------------
-# LOCAL CONFIGS
+# RSPAMD LOCAL CONFIG
 # ----------------------------
 cat > /etc/rspamd/local.d/redis.conf <<EOF
 servers = "127.0.0.1:6379";
@@ -832,15 +790,6 @@ port     = 11334
 filter   = rspamd
 logpath  = /var/log/rspamd/rspamd.log
 maxretry = 3
-
-[z-push]
-enabled  = true
-port     = http,https
-filter   = z-push
-logpath  = /var/log/z-push/z-push.log
-maxretry = 5
-findtime = 600
-bantime  = 3600
 EOF
 
 cat > /etc/fail2ban/filter.d/rspamd.conf <<EOF
@@ -849,31 +798,6 @@ failregex = ^.*controller; .* \(.*\) <.*>; auth_handler: auth failed from <HOST>
             ^.*controller; .* \(.*\) <.*>; auth_handler: unauthorized from <HOST>$
 ignoreregex =
 EOF
-
-cat > /etc/fail2ban/filter.d/z-push.conf <<EOF
-[Definition]
-failregex = ^.* \[WARN\] \[.*\] User-Agent: '.*' IP: '<HOST>' refers to unknown user or password incorrect$
-ignoreregex =
-EOF
-
-# ----------------------------
-# Z-Push
-# ----------------------------
-mkdir -p /usr/share/z-push /var/log/z-push /var/lib/z-push
-chown -R apache:apache /usr/share/z-push /var/log/z-push /var/lib/z-push
-chmod 755 /usr/share/z-push /var/log/z-push /var/lib/z-push
-chcon -R -t httpd_sys_content_t /usr/share/z-push
-git clone https://github.com/Z-Hub/Z-Push.git
-cp -R Z-Push*/src/* /usr/share/z-push
-sed -i "s/define('TIMEZONE', '');/define('TIMEZONE', 'America\/Chicago');/" /usr/share/z-push/config.php
-sed -i "s/define('IPC_PROVIDER', '');/define('IPC_PROVIDER', 'IpcSharedMemoryProvider');/" /usr/share/z-push/config.php
-sed -i "s/define('LOGLEVEL', 'LOGLEVEL_INFO');/define('LOGLEVEL', 'LOGLEVEL_WARN');/" /usr/share/z-push/config.php
-sed -i "s/define('BACKEND_PROVIDER', '');/define('BACKEND_PROVIDER', 'BackendIMAP');/" /usr/share/z-push/config.php
-sed -i "s/define('IMAP_PORT', '143');/define('IMAP_PORT', '993');/" /usr/share/z-push/backend/imap/config.php
-sed -i "s/define('IMAP_OPTIONS', '\/notls\/norsh');/define('IMAP_OPTIONS', '\/ssl\/novalidate-cert');/" /usr/share/z-push/backend/imap/config.php
-sed -i "s/define('IMAP_FOLDER_CONFIGURED', 'false');/define('IMAP_FOLDER_CONFIGURED', 'true');/" /usr/share/z-push/backend/imap/config.php
-sed -i "s/define('IMAP_FOLDER_SENT', 'SENT');/define('IMAP_FOLDER_SENT', 'SENT MESSAGES');/" /usr/share/z-push/backend/imap/config.php
-sed -i "s/define('IMAP_FOLDER_SPAM', 'SPAM');/define('IMAP_FOLDER_SPAM', 'JUNK');/" /usr/share/z-push/backend/imap/config.php
 
 # ----------------------------
 # UNBOUND
@@ -923,8 +847,8 @@ systemctl enable --now certbot-renew.timer
 restorecon -Rv /etc/postfix /var/spool/postfix /usr/libexec/postfix
 setsebool -P nis_enabled 1
 echo "Restarting Services..."
-systemctl enable --now redis rspamd postfix dovecot fail2ban unbound httpd php-fpm
-systemctl restart redis rspamd postfix dovecot fail2ban unbound httpd php-fpm
+systemctl enable --now redis rspamd postfix dovecot fail2ban unbound
+systemctl restart redis rspamd postfix dovecot fail2ban unbound
 
 echo ""
 echo "INSTALL COMPLETE"
