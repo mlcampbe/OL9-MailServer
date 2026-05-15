@@ -341,7 +341,7 @@ sed -i '$d' /etc/dovecot/conf.d/90-sieve.conf
 cat >>/etc/dovecot/conf.d/90-sieve.conf <<EOF
 
   # When moving TO Junk
-  sieve_pipe_bin_dir = /usr/bin
+  sieve_pipe_bin_dir = /usr/libexec/dovecot/sieve
 
   # Triggered when moving to the folder with the 'Junk' special-use attribute
   imapsieve_mailbox1_name = Junk
@@ -366,6 +366,39 @@ sed -i -e '/inet_listener sieve {/ s/^[[:blank:]]*#[[:blank:]]*/  /' \
        -e '/inet_listener sieve {/,/}/ { /^[[:blank:]]*#[[:blank:]]*}/ s/^[[:blank:]]*#[[:blank:]]*/  / }' /etc/dovecot/conf.d/20-managesieve.conf
 
 # Sieve file setup
+mkdir -p /usr/libexec/dovecot/sieve
+cat > /usr/libexec/dovecot/sieve/learn-spam.sh <<EOF
+#!/bin/sh
+# Force a clean path environment
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+
+# Explicitly navigate to the user's home directory
+cd "$HOME" || exit 1
+
+# Use curl to send stdin directly to Rspamd over HTTPS
+exec curl -k -s -X POST \
+  --data-binary @- \
+  -H "Password: $RSPAMDPASS" \
+  "https://127.0.0.1:11334/learnspam" > ~/.dovecot-sieve-errors.log 2>&1
+EOF
+chmod 755 /usr/libexec/dovecot/sieve/learn-spam.sh
+
+cat > /usr/libexec/dovecot/sieve/learn-spam.sh <<EOF
+#!/bin/sh
+# Force a clean path environment
+export PATH=/usr/bin:/bin:/usr/sbin:/sbin
+
+# Explicitly navigate to the user's home directory
+cd "$HOME" || exit 1
+
+# Use curl to send stdin directly to Rspamd over HTTPS
+exec curl -k -s -X POST \
+  --data-binary @- \
+  -H "Password: $RSPAMDPASS" \
+  "https://127.0.0.1:11334/learnham" > ~/.dovecot-sieve-errors.log 2>&1
+EOF
+chmod 755 /usr/libexec/dovecot/sieve/learn-ham.sh
+
 mkdir -p /etc/dovecot/sieve
 cat > /etc/dovecot/sieve/move-to-junk.sieve <<EOF
 require ["fileinto"];
@@ -383,7 +416,7 @@ cat > /etc/dovecot/sieve/learn-spam.sieve <<EOF
 require ["vnd.dovecot.pipe", "copy", "imapsieve", "environment", "variables"];
 
 if anyof (environment :is "imap.cause" "COPY", environment :is "imap.cause" "APPEND") {
-    pipe :copy "rspamc" ["-P", "$RSPAMDPASS", "learn_spam"];
+    pipe :copy "learn-spam.sh";
 }
 EOF
 sievec /etc/dovecot/sieve/learn-spam.sieve
@@ -392,7 +425,7 @@ cat > /etc/dovecot/sieve/learn-ham.sieve <<EOF
 require ["vnd.dovecot.pipe", "copy", "imapsieve", "environment", "variables"];
 
 if anyof (environment :is "imap.cause" "COPY", environment :is "imap.cause" "APPEND") {
-    pipe :copy "rspamc" ["-P", "$RSPAMDPASS", "learn_ham"];
+    pipe :copy "learn-ham.sh";
 }
 EOF
 sievec /etc/dovecot/sieve/learn-ham.sieve
@@ -416,6 +449,49 @@ sed -i "/mailbox Drafts {/a \    auto = subscribe" /etc/dovecot/conf.d/15-mailbo
 sed -i "/mailbox Trash {/a \    auto = subscribe\n    autoexpunge = 365d" /etc/dovecot/conf.d/15-mailboxes.conf
 sed -i "/mailbox \"Sent Messages\" {/a \    auto = subscribe" /etc/dovecot/conf.d/15-mailboxes.conf
 
+# XAPS - https://github.com/freswa/dovecot-xaps-daemon
+cat > /etc/dovecot/conf.d/95-xaps.conf <<EOF
+protocol imap {
+  mail_plugins = $mail_plugins notify push_notification xaps_push_notification xaps_imap
+}
+
+protocol lda {
+  mail_plugins = $mail_plugins notify push_notification xaps_push_notification
+}
+
+protocol lmtp {
+  mail_plugins = $mail_plugins notify push_notification xaps_push_notification
+}
+
+plugin {
+    # xaps_config contains xaps specific configuration parameters
+    # url:              protocol, hostname and port under which xapsd listens
+    # user_lookup: Use if you want to determine the username used for PNs from environment variables provided by
+    #                   login mechanism. Value is variable name to look up.
+    # max_retries:      maximum num of retries the http client connects to the xaps daemon
+    # timeout_msecs     http timeout of the http connection
+	xaps_config = url=http://127.0.0.1:11619 user_lookup=theattribute max_retries=6 timeout_msecs=5000
+	push_notification_driver = xaps
+}
+EOF
+
+# ----------------------------
+# XAPSD CONFIG - https://colincogle.name/blog/dovecot-with-apple-push/
+# ----------------------------
+echo "Configuring Xapsd..."
+cp xapsd /usr/bin
+cp lib25_xaps_imap_plugin.so /usr/lib64/dovecot
+cp lib25_xaps_push_notification_plugin.so /usr/lib64/dovecot
+useradd --create-home --home-dir /var/lib/xapsd --shell /bin/false --user-group xapsd
+mkdir -p /etc/xapsd/ /var/lib/xapsd
+chown xapsd:xapsd /var/lib/xapsd
+git clone https://github.com/freswa/dovecot-xaps-daemon.git
+cd dovecot-xaps-daemon
+cp configs/xapsd/xapsd.yaml /etc/xapsd/xapsd.yaml
+cp configs/xapsd/xapsd.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now xapsd
+
 # ----------------------------
 # RSPAMD CONFIG
 # ----------------------------
@@ -426,15 +502,14 @@ mkdir -p /var/lib/rspamd/dkim
 # Dashboard + controller
 HASHED_PASS=$(rspamadm pw -p "$RSPAMDPASS" -q)
 cat > /etc/rspamd/local.d/worker-controller.inc <<EOF
-bind_socket = "127.0.0.1:11334";
+bind_socket = "127.0.0.1:11334 ssl";
 secure_ip = "127.0.0.1";
 password = "$HASHED_PASS";
 enable_password = "$HASHED_PASS";
+ssl_cert = "/etc/letsencrypt/live/$MAILHOST/fullchain.pem"
+ssl_key = "/etc/letsencrypt/live/$MAILHOST/privkey.pem"
 EOF
 
-# ----------------------------
-# RSPAMD LOCAL CONFIG
-# ----------------------------
 cat > /etc/rspamd/local.d/redis.conf <<EOF
 servers = "127.0.0.1:6379";
 EOF
@@ -664,8 +739,8 @@ else
 fi
 optns="$addrs
 neighbours {
-  primary { host = "http://$MAILHOST:11334"; }
-  backup { host = "http://backup-$MAILHOST:11334"; }
+  primary { host = "https://$MAILHOST:11334"; }
+  backup { host = "https://backup-$MAILHOST:11334"; }
 }
 dns {
     #nameserver = ["127.0.0.1:5353"];
