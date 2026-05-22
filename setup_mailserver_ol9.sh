@@ -267,6 +267,12 @@ postmaster@$DOMAIN mike@$DOMAIN
 EOF
 postmap /etc/postfix/virtual
 
+mkdir -p /etc/systemd/system/postfix.service.d
+cat > /etc/systemd/system/postfix.service.d/override.conf <<EOF
+[Service]
+LimitNOFILE=65536
+EOF
+
 # ----------------------------
 # SMTP2GO AUTH
 # ----------------------------
@@ -840,21 +846,22 @@ backend = systemd
 usedns = no
 
 [dovecot]
+[dovecot]
 enabled = true
 maxretry = 3
+mode = aggressive
+port    = pop3,pop3s,imap,imaps,submission,sieve
+logpath = /var/log/maillog
 
 [postfix]
 enabled = true
 maxretry = 3
 mode = aggressive
 
-[postfix-sasl]
-enabled = true
-maxretry = 3
-
 [recidive]
 enabled = true
 logpath = /var/log/fail2ban.log
+backend = polling
 bantime = 1w
 findtime = 1d
 maxretry = 5
@@ -868,11 +875,15 @@ maxretry = 3
 EOF
 
 cat > /etc/fail2ban/filter.d/rspamd.conf <<EOF
-[Definition]
 failregex = ^.*controller; .* \(.*\) <.*>; auth_handler: auth failed from <HOST>$
             ^.*controller; .* \(.*\) <.*>; auth_handler: unauthorized from <HOST>$
+            ^.*map; .* ip: <HOST> is blacklisted.*$
+            ^.*ratelimit; .* ip: <HOST> exceeded rate limit.*$
+            ^.*rspamd_snprintf:.* <HOST>.* forbidden by fuzzy storage.*$
 ignoreregex =
 EOF
+
+sed -i '/\[Pp\]assword mismatch)/a \            Disconnected: Connection closed: SSL_accept\\(\\)\\ failed:.* rip=<HOST>' /etc/fail2ban/filter.d/dovecot.conf
 
 # ----------------------------
 # UNBOUND
@@ -922,6 +933,7 @@ systemctl enable --now certbot-renew.timer
 restorecon -Rv /etc/postfix /var/spool/postfix /usr/libexec/postfix
 setsebool -P nis_enabled 1
 echo "Restarting Services..."
+systemctl daemon-reload
 systemctl enable --now redis rspamd postfix dovecot fail2ban unbound
 systemctl restart redis rspamd postfix dovecot fail2ban unbound
 
