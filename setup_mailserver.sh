@@ -861,7 +861,7 @@ mode = aggressive
 [recidive]
 enabled = true
 logpath = /var/log/fail2ban.log
-backend = polling
+backend = auto
 bantime = 1w
 findtime = 1d
 maxretry = 5
@@ -871,6 +871,11 @@ enabled  = true
 port     = 11334
 filter   = rspamd
 logpath  = /var/log/rspamd/rspamd.log
+maxretry = 3
+
+[sshd]
+enabled = true
+port    = ssh
 maxretry = 3
 EOF
 
