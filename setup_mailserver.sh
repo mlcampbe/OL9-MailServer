@@ -928,6 +928,11 @@ chmod +x /etc/letsencrypt/renewal-hooks/deploy/reload-mail.sh
 systemctl enable --now certbot-renew.timer
 
 # ----------------------------
+# RECONFIGURE SSL MAX TRIES
+# ----------------------------
+sed -i 's/^[#[:space:]]*MaxAuthTries[[:space:]]+[0-9]+/MaxAuthTries 3/' /etc/ssh/sshd_config
+
+# ----------------------------
 # CREATE POSTMASTER ACCOUNT
 # ----------------------------
 ./add_user.sh postmaster@$DOMAIN $POSTMASTERPASS
@@ -940,7 +945,7 @@ setsebool -P nis_enabled 1
 echo "Restarting Services..."
 systemctl daemon-reload
 systemctl enable --now redis rspamd postfix dovecot fail2ban unbound
-systemctl restart redis rspamd postfix dovecot fail2ban unbound
+systemctl restart redis rspamd postfix dovecot fail2ban unbound sshd
 
 echo ""
 echo "INSTALL COMPLETE"
