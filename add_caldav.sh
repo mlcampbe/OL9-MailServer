@@ -80,13 +80,14 @@ permissions: rw
 # For any calendar that should be public, add a separate exact rule such as
 [public-mike-calendar]
 user: .*
-collection: ^mike@mlc1\.net/mike$
+collection: ^mike@mlc1\.net/A73C9E41-2B84-4D7F-9A16-8E5B3C7F2D94(/.*)?$
 permissions: r
 
 [public-family-calendar]
 user: .*
-collection: ^mike@mlc1\.net/family$
+collection: ^mike@mlc1\.net/D8F14B92-5E6A-4C3D-AB87-1F9E6C24A7B5(/.*)?$
 permissions: r
+
 EOF
 
 # ----------------------------
