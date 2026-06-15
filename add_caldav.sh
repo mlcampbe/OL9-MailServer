@@ -90,6 +90,32 @@ permissions: r
 EOF
 
 # ----------------------------
+# UPDATE RSYSLOG
+# ----------------------------
+echo > /etc/rsyslog.d/30-radicale.conf <<EOF
+if $programname == 'radicale' then /var/log/radicale.log
+& stop
+EOF
+
+echo > /etc/logrotate.d/radicale <<EOF
+/var/log/radicale.log {
+    daily
+    rotate 7
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0640 root root
+    sharedscripts
+    postrotate
+        /bin/systemctl kill -s HUP rsyslog.service >/dev/null 2>&1 || true
+    endscript
+}
+EOF
+touch /var/log/radicale.log
+chmod 0640 /var/log/radicale.log
+
+# ----------------------------
 # UPDATE DOVECOT 10-master.conf
 # ----------------------------
 sed -i '/service auth {/,/}/ {
@@ -125,7 +151,7 @@ EOF
 # ----------------------------
 systemctl daemon-reload
 systemctl enable --now radicale
-systemctl restart fail2ban radicale
+systemctl restart fail2ban radicale rsyslog
 
 echo ""
 echo "INSTALL COMPLETE"
