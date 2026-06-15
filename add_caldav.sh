@@ -53,10 +53,40 @@ dovecot_socket = /var/run/dovecot/auth-radicale
 type = internal
 
 [rights]
-type = owner_only
+type = from_file
+file = /etc/radicale/rights
 
 [storage]
 filesystem_folder = /var/lib/radicale/collections
+EOF
+
+cat >> /etc/radicale/rights <<EOF
+# The following 3 rules set authenticated user access to their own principal and their own direct child calendars
+[root]
+user: .+
+collection:
+permissions: R
+
+[principal]
+user: .+
+collection: {user}
+permissions: RW
+
+[calendars]
+user: .+
+collection: {user}/[^/]+
+permissions: rw
+
+# For any calendar that should be public, add a separate exact rule such as
+[public-mike-calendar]
+user: .*
+collection: ^mike@mlc1\.net/mike$
+permissions: r
+
+[public-family-calendar]
+user: .*
+collection: ^mike@mlc1\.net/family$
+permissions: r
 EOF
 
 # ----------------------------
